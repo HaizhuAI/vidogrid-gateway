@@ -1,0 +1,17 @@
+{
+  "name": "vidogrid-gateway",
+  "version": "1.0.0",
+  "description": "OpenAI-compatible API gateway over vidogrid.ai video generation (reverse-engineered upstream)",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.16.0",
+    "undici": "^7.30.2"
+  }
+}

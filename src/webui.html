@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VidoGrid Gateway · 管理面板</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#e6edf3;--dim:#8b949e;--acc:#58a6ff;--ok:#3fb950;--err:#f85149;--warn:#d29922}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+a{color:var(--acc)}
+button{background:#21262d;color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 14px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--acc)}
+button.pri{background:#1f6feb;border-color:#1f6feb;color:#fff}
+button.danger{color:var(--err)}
+button.sm{padding:2px 8px;font-size:12px}
+input,select,textarea{background:#0d1117;border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:7px 10px;font:inherit;width:100%}
+input:focus,select:focus{border-color:var(--acc);outline:none}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle}
+th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;border:1px solid var(--border)}
+.tag.ok{color:var(--ok);border-color:var(--ok)}
+.tag.err{color:var(--err);border-color:var(--err)}
+.tag.warn{color:var(--warn);border-color:var(--warn)}
+.tag.dim{color:var(--dim)}
+#login{max-width:340px;margin:15vh auto;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:32px}
+#login h1{font-size:18px;margin-bottom:20px;text-align:center}
+#app{display:none}
+header{display:flex;align-items:center;gap:16px;padding:12px 24px;border-bottom:1px solid var(--border);background:var(--panel)}
+header h1{font-size:16px}
+nav{display:flex;gap:4px;flex:1}
+nav button{border:none;background:none;color:var(--dim);padding:6px 12px;border-radius:6px}
+nav button.on{background:#21262d;color:var(--fg)}
+main{padding:20px 24px;max-width:1400px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+.card .n{font-size:26px;font-weight:700}
+.card .l{color:var(--dim);font-size:12px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+.panel h2{font-size:14px;margin-bottom:12px;color:var(--dim)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:14px}
+.row>div{flex:1;min-width:140px}
+.row label{display:block;font-size:12px;color:var(--dim);margin-bottom:4px}
+.mono{font-family:monospace;font-size:12px}
+.ellip{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mut{color:var(--dim);font-size:12px}
+#toast{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:9}
+.tmsg{background:var(--panel);border:1px solid var(--acc);border-radius:8px;padding:10px 16px;max-width:360px}
+.tmsg.err{border-color:var(--err)}
+.hidden{display:none}
+pre{white-space:pre-wrap;word-break:break-all;background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;max-height:300px;overflow:auto}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>VidoGrid Gateway</h1>
+  <input type="password" id="pw" placeholder="管理员密码" autofocus>
+  <div style="height:12px"></div>
+  <button class="pri" style="width:100%" onclick="doLogin()">登 录</button>
+  <div id="loginerr" class="mut" style="margin-top:10px;color:var(--err)"></div>
+</div>
+
+<div id="app">
+<header>
+  <h1>⚡ VidoGrid Gateway</h1>
+  <nav id="nav">
+    <button data-t="overview" class="on">概览</button>
+    <button data-t="accounts">账号池</button>
+    <button data-t="repl">补给</button>
+    <button data-t="keys">API Keys</button>
+    <button data-t="models">模型开关</button>
+    <button data-t="jobs">任务记录</button>
+    <button data-t="logs">日志</button>
+  </nav>
+  <button onclick="logout()">退出</button>
+</header>
+<main id="main"></main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let TAB='overview';
+const $=s=>document.querySelector(s);
+const api=async(p,o={})=>{const r=await fetch('/admin/api'+p,{headers:{'Content-Type':'application/json'},...o,body:o.body?JSON.stringify(o.body):undefined});
+  if(r.status===401){showLogin();throw new Error('unauthorized')}
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(d.error||('HTTP '+r.status));
+  return d;};
+const toast=(m,err)=>{const d=document.createElement('div');d.className='tmsg'+(err?' err':'');d.textContent=m;$('#toast').appendChild(d);setTimeout(()=>d.remove(),4000)};
+const ts=t=>t?new Date(t).toLocaleString():'—';
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function doLogin(){
+  try{
+    await api('/login',{method:'POST',body:{password:$('#pw').value}});
+    $('#login').style.display='none';$('#app').style.display='block';render();
+  }catch(e){$('#loginerr').textContent=e.message}
+}
+$('#pw').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+async function logout(){await api('/logout',{method:'POST'}).catch(()=>{});showLogin()}
+function showLogin(){$('#app').style.display='none';$('#login').style.display='block'}
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{TAB=b.dataset.t;
+  document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x===b));render()});
+
+async function render(){
+  const m=$('#main');
+  try{
+    if(TAB==='overview')return renderOverview(m);
+    if(TAB==='accounts')return renderAccounts(m);
+    if(TAB==='repl')return renderRepl(m);
+    if(TAB==='keys')return renderKeys(m);
+    if(TAB==='models')return renderModels(m);
+    if(TAB==='jobs')return renderJobs(m);
+    if(TAB==='logs')return renderLogs(m);
+  }catch(e){m.innerHTML='<div class="panel"><span class="tag err">错误</span> '+esc(e.message)+'</div>'}
+}
+
+async function renderOverview(m){
+  const d=await api('/overview');
+  m.innerHTML=`<div class="cards">
+    <div class="card"><div class="n">${d.accounts.authed}/${d.accounts.enabled}</div><div class="l">已认证 / 已启用账号（共 ${d.accounts.total}）</div></div>
+    <div class="card"><div class="n">${d.pools?.main.healthy??0}</div><div class="l">主池健康（配额 ${d.pools?.main.quota??0}）</div></div>
+    <div class="card"><div class="n">${d.pools?.reserve.healthy??0}</div><div class="l">冗余池健康（配额 ${d.pools?.reserve.quota??0}）</div></div>
+    <div class="card"><div class="n">${d.keys.enabled}</div><div class="l">启用 API Keys（共 ${d.keys.total}）</div></div>
+    <div class="card"><div class="n">${d.models_enabled}</div><div class="l">启用模型</div></div>
+    <div class="card"><div class="n">${d.jobs.running}</div><div class="l">进行中任务</div></div>
+    <div class="card"><div class="n" style="color:var(--ok)">${d.jobs.completed}</div><div class="l">已完成</div></div>
+    <div class="card"><div class="n" style="color:var(--err)">${d.jobs.failed}</div><div class="l">失败</div></div>
+  </div>
+  <div class="panel"><h2>API 用法</h2><pre>POST ${location.origin}/v1/videos
+Authorization: Bearer vg-xxxxxxxx
+Content-Type: application/json
+
+{
+  "model": "muse-ai-video",
+  "prompt": "a cat walking in the rain, cinematic",
+  "aspect_ratio": "16:9",          // muse/vela 也可用 orientation: portrait|landscape|square
+  "duration": 10,                   // 秒；muse 固定 10
+  "resolution": "720p",             // 视模型而定
+  "input_reference": "https://…/img.jpg",   // 参考图：URL / data URI / b64
+  "turnstile_token": "skip",        // 默认 skip；免费号可能需要真实 token
+  "wait": true                      // 可选：阻塞直到完成（默认轮询模式）
+}
+
+GET  ${location.origin}/v1/videos/{id}        → 状态/进度/video_url
+GET  ${location.origin}/v1/videos/{id}/content → 302 跳视频（?proxy=1 走代理）
+GET  ${location.origin}/v1/models              → 可用模型与参数</pre></div>
+  <div class="panel"><h2>最近日志</h2><table>${d.recent_logs.map(l=>`<tr><td class="mut">${ts(l.ts)}</td><td><span class="tag ${l.level==='warn'?'warn':l.level==='error'?'err':'dim'}">${l.level}</span></td><td>${esc(l.msg)}</td></tr>`).join('')}</table></div>`;
+}
+
+async function renderAccounts(m){
+  const {data}=await api('/accounts');
+  const {data:ps}=await api('/pool/stats');
+  const pname={main:'主池',reserve:'冗余',spent:'退役'};
+  const ptag={main:'ok',reserve:'warn',spent:'dim'};
+  m.innerHTML=`<div class="cards">
+    <div class="card"><div class="n">${ps.pools.main.healthy}/${ps.pools.main.total}</div><div class="l">主池健康/总数 · 配额 ${ps.pools.main.quota}</div></div>
+    <div class="card"><div class="n">${ps.pools.reserve.healthy}/${ps.pools.reserve.total}</div><div class="l">冗余池健康/总数 · 配额 ${ps.pools.reserve.quota}</div></div>
+    <div class="card"><div class="n">${ps.pools.spent.total}</div><div class="l">退役号</div></div>
+    <div class="card"><div class="n">${ps.registrar.today}</div><div class="l">今日已注册</div></div>
+  </div>
+  <div class="panel"><h2>添加上游账号 / 一键注册</h2>
+    <div class="row">
+      <div><label>用户名/邮箱</label><input id="au"></div>
+      <div><label>密码</label><input id="ap" type="password"></div>
+      <div><label>备注</label><input id="an"></div>
+      <div style="flex:0"><button class="pri" onclick="addAcc()">添加并登录</button></div>
+      <div style="flex:0"><button onclick="regN(1)">注册 1 号</button></div>
+      <div style="flex:0"><button onclick="regN(5)">注册 5 号</button></div>
+    </div>
+    <table><tr><th>账号</th><th>池</th><th>状态</th><th>套餐</th><th>配额</th><th>请求/失败</th><th>最后错误</th><th>操作</th></tr>
+    ${data.map(a=>`<tr>
+      <td>${esc(a.username)}<div class="mut mono">${a.id}</div></td>
+      <td><span class="tag ${ptag[a.pool]||'dim'}">${pname[a.pool]||a.pool}</span></td>
+      <td>${a.enabled?'<span class="tag ok">启用</span>':'<span class="tag dim">停用</span>'} ${a.authenticated?'<span class="tag ok">已认证</span>':'<span class="tag warn">未认证</span>'}</td>
+      <td class="mut">${esc(a.plan||'—')}${a.is_premium?' <span class="tag ok">P</span>':''}${a.is_free?' <span class="tag dim">F</span>':''}</td>
+      <td class="mono">${a.quota===null||a.quota===undefined?'—':a.quota}</td>
+      <td class="mono">${a.stats.requests}/${a.stats.failures}</td>
+      <td class="ellip mut">${esc(a.last_error||'')}</td>
+      <td><button class="sm" onclick="accAction('${a.id}','me')">刷新</button>
+          <button class="sm" onclick="accMove('${a.id}','main')" title="提拔到主池">→主</button>
+          <button class="sm" onclick="accMove('${a.id}','reserve')" title="降到冗余">→备</button>
+          <button class="sm" onclick="accMove('${a.id}','spent')" title="退役">→退</button>
+          <button class="sm" onclick="accToggle('${a.id}',${!a.enabled})">${a.enabled?'停':'启'}</button>
+          <button class="sm danger" onclick="accDel('${a.id}')">删</button></td>
+    </tr>`).join('')}</table></div>`;
+}
+async function addAcc(){try{await api('/accounts',{method:'POST',body:{username:$('#au').value,password:$('#ap').value,notes:$('#an').value}});toast('已添加');render()}catch(e){toast(e.message,1)}}
+async function regN(n){try{toast('注册中…');const r=await api('/register',{method:'POST',body:{count:n}});toast(`注册 ${r.data.registered.length} 个`+(r.data.failed.length?` 失败${r.data.failed.length}`:''));render()}catch(e){toast(e.message,1)}}
+async function accAction(id,act){try{await api('/accounts/'+id+'/'+act,{method:'POST'});toast('ok');render()}catch(e){toast(e.message,1)}}
+async function accMove(id,pool){try{await api('/accounts/'+id+'/pool',{method:'POST',body:{pool}});render()}catch(e){toast(e.message,1)}}
+async function accToggle(id,en){try{await api('/accounts/'+id,{method:'PATCH',body:{enabled:en}});render()}catch(e){toast(e.message,1)}}
+async function accDel(id){if(!confirm('删除该账号？'))return;try{await api('/accounts/'+id,{method:'DELETE'});render()}catch(e){toast(e.message,1)}}
+
+async function renderRepl(m){
+  const {data}=await api('/replenisher');
+  const s=data.settings, st=data.stats, rg=data.registrar;
+  m.innerHTML=`<div class="cards">
+    <div class="card"><div class="n" style="color:${s.enabled?'var(--ok)':'var(--err)'}">${s.enabled?'运行中':'已停用'}</div><div class="l">自动补给${data.running?' · 本轮执行中':''}</div></div>
+    <div class="card"><div class="n">${st.main.healthy}/${s.main_target}</div><div class="l">主池健康 / 目标（阈值 ${s.main_min}）</div></div>
+    <div class="card"><div class="n">${st.reserve.healthy}/${s.reserve_target}</div><div class="l">冗余池健康 / 目标</div></div>
+    <div class="card"><div class="n">${rg.today}</div><div class="l">今日已注册 / 上限 ${s.daily_cap}${rg.next_allowed_at&&rg.next_allowed_at>Date.now()?' · 冷却至 '+new Date(rg.next_allowed_at).toLocaleTimeString():''}</div></div>
+    <div class="card"><div class="n">${st.main.quota+st.reserve.quota}</div><div class="l">可用总配额（视频条数）</div></div>
+  </div>
+  <div class="panel"><h2>补给策略</h2>
+    <div class="row">
+      <div><label>自动补给</label><select id="rs_en"><option value="1" ${s.enabled?'selected':''}>开启</option><option value="0" ${!s.enabled?'selected':''}>关闭</option></select></div>
+      <div><label>巡检间隔（秒）</label><input id="rs_int" type="number" value="${s.interval_sec}"></div>
+      <div><label>主池阈值（低于即补）</label><input id="rs_min" type="number" value="${s.main_min}"></div>
+      <div><label>主池目标数</label><input id="rs_mt" type="number" value="${s.main_target}"></div>
+      <div><label>冗余池目标数</label><input id="rs_rt" type="number" value="${s.reserve_target}"></div>
+    </div>
+    <div class="row">
+      <div><label>每轮最多注册</label><input id="rs_bs" type="number" value="${s.batch_size}"></div>
+      <div><label>每日注册上限</label><input id="rs_dc" type="number" value="${s.daily_cap}"></div>
+      <div><label>新号入池</label><select id="rs_into"><option value="reserve" ${s.register_into==='reserve'?'selected':''}>冗余池（推荐）</option><option value="main" ${s.register_into==='main'?'selected':''}>主池</option></select></div>
+      <div><label>配额刷新（秒）</label><input id="rs_rf" type="number" value="${s.refresh_stale_sec}"></div>
+    </div>
+    <div class="row">
+      <div><label>注册邮箱域（逗号分隔）</label><input id="rs_dom" value="${esc((s.email_domains||[]).join(','))}"></div>
+      <div><label>tempmail-hub 地址（可选，真实收件箱）</label><input id="rs_tm" value="${esc(s.tempmail_hub_url||'')}" placeholder="http://localhost:8000"></div>
+    </div>
+    <div class="row">
+      <div><label>轮换代理网关（每号 1 次请求换 IP）</label><input id="rs_px" value="${esc(s.proxy_url||'')}" placeholder="http://user:pass@gw.example:8080"></div>
+      <div><label>静态代理池（每行 1 个，轮换使用）</label><textarea id="rs_pxs" rows="3" placeholder="http://ip1:port&#10;socks5://ip2:port">${esc((s.proxies||[]).join('\n'))}</textarea></div>
+    </div>
+    <div class="row" style="align-items:center">
+      <div style="flex:0"><button class="pri" onclick="saveRepl()">保存设置</button></div>
+      <div style="flex:0"><button onclick="doReplenish()">立即补给一轮</button></div>
+      <div style="flex:0"><button onclick="regN(10)">手动注册 10 号</button></div>
+    </div>
+  </div>
+  <div class="panel"><h2>机制</h2><pre>每 ${s.interval_sec}s：刷新过期配额 → 配额=0 退入 spent → 主池健康&lt;目标时先从冗余提拔
+→ 仍不足按 batch_size 注册新号（POST /api/signup 无验证码无邮箱验证）→ 冗余池补到目标水位
+生成请求遇配额错误自动切下一个号（最多 3 跳），退役号永不复用。
+注意：上游 /signup 按 IP 限流 ~3h/号 —— 想无限补必须配轮换代理（proxy_url）或静态代理池。</pre></div>`;
+}
+async function saveRepl(){
+  try{
+    await api('/replenisher',{method:'PUT',body:{
+      enabled:$('#rs_en').value==='1',
+      interval_sec:+$('#rs_int').value, main_min:+$('#rs_min').value,
+      main_target:+$('#rs_mt').value, reserve_target:+$('#rs_rt').value,
+      batch_size:+$('#rs_bs').value, daily_cap:+$('#rs_dc').value,
+      register_into:$('#rs_into').value, refresh_stale_sec:+$('#rs_rf').value,
+      email_domains:$('#rs_dom').value.split(',').map(x=>x.trim()).filter(Boolean),
+      tempmail_hub_url:$('#rs_tm').value.trim(),
+      proxy_url:$('#rs_px').value.trim(),
+      proxies:$('#rs_pxs').value.split('\n').map(x=>x.trim()).filter(Boolean),
+    }});
+    toast('已保存');render();
+  }catch(e){toast(e.message,1)}
+}
+async function doReplenish(){try{toast('补给中…');const r=await api('/replenish',{method:'POST',body:{}});toast(`提拔${r.data.promoted} 注册${r.data.registered}`+(r.data.failed?.length?` 失败${r.data.failed.length}`:''));render()}catch(e){toast(e.message,1)}}
+
+async function renderKeys(m){
+  const {data}=await api('/keys');
+  const models=(await api('/models')).data;
+  m.innerHTML=`<div class="panel"><h2>创建 API Key</h2>
+    <div class="row">
+      <div><label>名称</label><input id="kn"></div>
+      <div><label>限定模型（空=全部，逗号分隔）</label><input id="km" placeholder="muse-ai-video,sora-2"></div>
+      <div><label>管理 KEY（可调 /admin/api）</label><select id="ka"><option value="0">否</option><option value="1">是（vg-admin-）</option></select></div>
+      <div style="flex:0"><button class="pri" onclick="addKey()">创建</button></div>
+    </div>
+    <div id="newkey"></div>
+    <table><tr><th>名称</th><th>Key</th><th>类型</th><th>模型限制</th><th>用量</th><th>最近使用</th><th>状态</th><th>操作</th></tr>
+    ${data.map(k=>`<tr>
+      <td>${esc(k.name)}</td><td class="mono">${esc(k.key_preview)}</td>
+      <td>${k.admin?'<span class="tag warn">管理</span>':'<span class="tag dim">业务</span>'}</td>
+      <td class="mut">${k.models?esc(k.models.join(',')):'全部'}</td>
+      <td class="mono">${k.usage_count}</td><td class="mut">${ts(k.last_used_at)}</td>
+      <td>${k.enabled?'<span class="tag ok">启用</span>':'<span class="tag err">停用</span>'}</td>
+      <td><button class="sm" onclick="keyToggle('${k.id}',${!k.enabled})">${k.enabled?'停用':'启用'}</button>
+          <button class="sm danger" onclick="keyDel('${k.id}')">删</button></td>
+    </tr>`).join('')}</table></div>`;
+}
+async function addKey(){
+  try{
+    const models=$('#km').value.split(',').map(s=>s.trim()).filter(Boolean);
+    const d=await api('/keys',{method:'POST',body:{name:$('#kn').value,models,admin:$('#ka').value==='1'}});
+    $('#newkey').innerHTML='<pre>Key（只显示一次）: '+esc(d.data.key)+'</pre>';
+    render();
+  }catch(e){toast(e.message,1)}
+}
+async function keyToggle(id,en){try{await api('/keys/'+id,{method:'PATCH',body:{enabled:en}});render()}catch(e){toast(e.message,1)}}
+async function keyDel(id){if(!confirm('删除该 Key？'))return;try{await api('/keys/'+id,{method:'DELETE'});render()}catch(e){toast(e.message,1)}}
+
+async function renderModels(m){
+  const {data}=await api('/models');
+  m.innerHTML=`<div class="panel"><h2>模型开关 <button class="sm" onclick="modelsAll(true)">全开</button> <button class="sm" onclick="modelsAll(false)">全关</button></h2>
+    <table><tr><th>模型</th><th>供应商</th><th>比例</th><th>时长</th><th>分辨率</th><th>参考图</th><th>费用</th><th>开关</th></tr>
+    ${data.map(x=>`<tr>
+      <td class="mono">${esc(x.id)}<div class="mut">${esc(x.label||'')}</div></td>
+      <td class="mut">${esc(x.provider)}</td>
+      <td class="mono">${esc((x.ratios||[]).join(' '))}</td>
+      <td class="mono">${esc((x.durations||[]).join(','))}s</td>
+      <td class="mono">${esc((x.resolutions||[]).join(' ')||'—')}</td>
+      <td class="mono">${x.max_reference_images||0}</td>
+      <td class="mono">${x.cost_credits??'—'}</td>
+      <td><button class="sm ${x.enabled?'':'danger'}" onclick="modelToggle('${x.id}',${!x.enabled})">${x.enabled?'✓ 开':'✗ 关'}</button></td>
+    </tr>`).join('')}</table></div>`;
+}
+async function modelToggle(id,en){try{await api('/models/'+encodeURIComponent(id),{method:'PATCH',body:{enabled:en}});render()}catch(e){toast(e.message,1)}}
+async function modelsAll(en){try{await api('/models/bulk',{method:'PATCH',body:{enabled:en}});render()}catch(e){toast(e.message,1)}}
+
+async function renderJobs(m){
+  const {data}=await api('/jobs?limit=80');
+  m.innerHTML=`<div class="panel"><h2>任务记录 <button class="sm" onclick="render()">刷新</button></h2>
+    <table><tr><th>ID</th><th>模型</th><th>提示词</th><th>账号</th><th>状态</th><th>视频</th><th>时间</th></tr>
+    ${data.map(j=>`<tr>
+      <td class="mono">${j.id}<div class="mut mono">${j.upstream_uuid||''}</div></td>
+      <td class="mono">${esc(j.model)}</td>
+      <td class="ellip mut">${esc(j.params?.prompt||'')}</td>
+      <td class="mut">${esc(j.account||'')}</td>
+      <td>${j.status==='completed'?'<span class="tag ok">完成</span>':j.status==='failed'?'<span class="tag err">失败</span>':'<span class="tag warn">进行中 '+(j.progress||'')+'</span>'}${j.error?'<div class="mut" style="color:var(--err)">'+esc(j.error)+'</div>':''}</td>
+      <td>${j.video_url?'<a href="'+esc(j.video_url)+'" target="_blank">视频</a> <a href="/v1/videos/'+j.id+'/content" target="_blank">代理</a>':'—'}</td>
+      <td class="mut">${ts(j.created_at)}</td>
+    </tr>`).join('')}</table></div>`;
+}
+
+async function renderLogs(m){
+  const {data}=await api('/logs?limit=200');
+  m.innerHTML=`<div class="panel"><h2>日志 <button class="sm" onclick="render()">刷新</button> <button class="sm danger" onclick="clearLogs()">清空</button></h2>
+    <table>${data.map(l=>`<tr><td class="mut">${ts(l.ts)}</td><td><span class="tag ${l.level==='warn'?'warn':l.level==='error'?'err':'dim'}">${l.level}</span></td><td>${esc(l.msg)}${l.meta?' <span class="mut">'+esc(JSON.stringify(l.meta))+'</span>':''}</td></tr>`).join('')}</table></div>`;
+}
+async function clearLogs(){await api('/logs',{method:'DELETE'});render()}
+
+// auto-login if session cookie still valid
+api('/overview').then(()=>{$('#login').style.display='none';$('#app').style.display='block';render()}).catch(()=>{});
+setInterval(()=>{if($('#app').style.display==='block'&&(TAB==='jobs'||TAB==='overview'||TAB==='accounts'||TAB==='repl'))render()},15000);
+</script>
+</body>
+</html>
